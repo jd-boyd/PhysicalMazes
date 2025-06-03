@@ -1,78 +1,138 @@
 var cols = 12
 var rows = 12;
 var w; // Cell size
-var grid = [];
-var current;
-var stack = [];
+var maze;
 
 var seed = 513;
 
 function setup() {
   //Good seeds: 126, 513
   //bad seeds 512
-    randomSeed(513);
+  randomSeed(513);
 
   createCanvas(400, 400);
   w = min(400/cols, 400/rows);
 
-  // Create grid of cells
-  for (let j = 0; j < rows; j++) {
-    for (let i = 0; i < cols; i++) {
-      let cell = new Cell(i, j);
-      grid.push(cell);
-    }
-  }
-
-  current = grid[0];
+  // Create maze object and initialize grid
+  maze = new Maze(cols, rows);
+  maze.createGrid();
 
   var gui = createGui('My awesome GUI');
   gui.addGlobals('seed', 'cols', 'rows');
 
   //button = createButton("Click me!");
   //button.mousePressed(buttonClicked);
-
 }
 
 function buttonClicked() {
   console.log("Button clicked!");
 }
 
-
 function draw() {
   background(51);
 
   // Draw all cells
-  for (let i = 0; i < grid.length; i++) {
-    grid[i].show();
-  }
+  maze.showGrid();
 
-  current.visited = true;
-  current.highlight();
-
-  // Step 1: Choose a random neighbor
-  let next = current.checkNeighbors();
-  if (next) {
-    next.visited = true;
-
-    // Step 2: Push current cell to the stack
-    stack.push(current);
-
-    // Step 3: Remove the wall between current and next
-    removeWalls(current, next);
-
-    // Step 4: Make the chosen cell the current cell
-    current = next;
-  } else if (stack.length > 0) {
-    current = stack.pop();
+  // Step the maze generation process
+  if (!maze.isComplete) {
+    maze.generateStep();
   }
 }
 
-// Helper to get grid index
-function index(i, j) {
-  if (i < 0 || j < 0 || i >= cols || j >= rows) {
-    return -1;
+// Maze object containing grid, current cell, and stack
+class Maze {
+  constructor(cols, rows) {
+    this.cols = cols;
+    this.rows = rows;
+    this.grid = [];
+    this.current = null;
+    this.stack = [];
+    this.isComplete = false;
   }
-  return i + j * cols;
+
+  // Create grid of cells
+  createGrid() {
+    this.grid = [];
+    for (let j = 0; j < this.rows; j++) {
+      for (let i = 0; i < this.cols; i++) {
+        let cell = new Cell(i, j);
+        this.grid.push(cell);
+      }
+    }
+    this.current = this.grid[0];
+    this.isComplete = false;
+  }
+
+  // Helper to get grid index
+  index(i, j) {
+    if (i < 0 || j < 0 || i >= this.cols || j >= this.rows) {
+      return -1;
+    }
+    return i + j * this.cols;
+  }
+
+  // Draw all cells in the grid
+  showGrid() {
+    for (let i = 0; i < this.grid.length; i++) {
+      this.grid[i].show();
+    }
+
+    if (this.current) {
+      this.current.highlight();
+    }
+  }
+
+  // Single step of maze generation
+  generateStep() {
+    if (this.isComplete) {
+      return false;
+    }
+
+    this.current.visited = true;
+
+    // Step 1: Choose a random neighbor
+    let next = this.current.checkNeighbors(this);
+    if (next) {
+      next.visited = true;
+
+      // Step 2: Push current cell to the stack
+      this.stack.push(this.current);
+
+      // Step 3: Remove the wall between current and next
+      this.removeWalls(this.current, next);
+
+      // Step 4: Make the chosen cell the current cell
+      this.current = next;
+    } else if (this.stack.length > 0) {
+      this.current = this.stack.pop();
+    } else {
+      // Maze generation is complete
+      this.isComplete = true;
+    }
+    return true;
+  }
+
+  // Remove walls between two cells
+  removeWalls(a, b) {
+    let x = a.i - b.i;
+    if (x === 1) {
+      a.walls[3] = false;
+      b.walls[1] = false;
+    } else if (x === -1) {
+      a.walls[1] = false;
+      b.walls[3] = false;
+    }
+
+    let y = a.j - b.j;
+    if (y === 1) {
+      a.walls[0] = false;
+      b.walls[2] = false;
+    } else if (y === -1) {
+      a.walls[2] = false;
+      b.walls[0] = false;
+    }
+  }
 }
 
 // Cell object
@@ -108,13 +168,13 @@ class Cell {
     rect(x, y, w, w);
   }
 
-  checkNeighbors() {
+  checkNeighbors(maze) {
     let neighbors = [];
 
-    let top = grid[index(this.i, this.j - 1)];
-    let right = grid[index(this.i + 1, this.j)];
-    let bottom = grid[index(this.i, this.j + 1)];
-    let left = grid[index(this.i - 1, this.j)];
+    let top = maze.grid[maze.index(this.i, this.j - 1)];
+    let right = maze.grid[maze.index(this.i + 1, this.j)];
+    let bottom = maze.grid[maze.index(this.i, this.j + 1)];
+    let left = maze.grid[maze.index(this.i - 1, this.j)];
 
     if (top && !top.visited) neighbors.push(top);
     if (right && !right.visited) neighbors.push(right);
@@ -127,27 +187,6 @@ class Cell {
     } else {
       return undefined;
     }
-  }
-}
-
-// Remove walls between two cells
-function removeWalls(a, b) {
-  let x = a.i - b.i;
-  if (x === 1) {
-    a.walls[3] = false;
-    b.walls[1] = false;
-  } else if (x === -1) {
-    a.walls[1] = false;
-    b.walls[3] = false;
-  }
-
-  let y = a.j - b.j;
-  if (y === 1) {
-    a.walls[0] = false;
-    b.walls[2] = false;
-  } else if (y === -1) {
-    a.walls[2] = false;
-    b.walls[0] = false;
   }
 }
 
