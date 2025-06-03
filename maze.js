@@ -1,8 +1,11 @@
-let cols = 12, rows = 12;
+var cols = 12
+var rows = 12;
 var w; // Cell size
-let grid = [];
-let current;
-let stack = [];
+var grid = [];
+var current;
+var stack = [];
+
+var seed = 513;
 
 function setup() {
   //Good seeds: 126, 513
@@ -21,7 +24,19 @@ function setup() {
   }
 
   current = grid[0];
+
+  var gui = createGui('My awesome GUI');
+  gui.addGlobals('seed', 'cols', 'rows');
+
+  //button = createButton("Click me!");
+  //button.mousePressed(buttonClicked);
+
 }
+
+function buttonClicked() {
+  console.log("Button clicked!");
+}
+
 
 function draw() {
   background(51);
