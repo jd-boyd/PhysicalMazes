@@ -1,0 +1,600 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Three.js Maze Generator</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            background: #1a1a1a;
+            color: white;
+            font-family: Arial, sans-serif;
+        }
+        #container {
+            width: 100%;
+            height: 80vh;
+            border: 1px solid #333;
+            margin-bottom: 20px;
+        }
+        #controls {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        input[type="file"] {
+            padding: 8px;
+            background: #333;
+            color: white;
+            border: 1px solid #555;
+            border-radius: 4px;
+        }
+        button {
+            padding: 8px 16px;
+            background: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-right: 10px;
+        }
+        button:hover {
+            background: #45a049;
+        }
+        #processBtn {
+            background: #2196F3;
+        }
+        #processBtn:hover {
+            background: #1976D2;
+        }
+        #processBtn:disabled {
+            background: #666;
+            cursor: not-allowed;
+        }
+        #info {
+            margin-top: 10px;
+            font-size: 14px;
+            color: #ccc;
+        }
+    </style>
+</head>
+<body>
+    <h1>Three.js Maze Generator</h1>
+    <div id="container"></div>
+    <div id="controls">
+        <input type="file" id="fileInput" accept=".json" />
+        <button onclick="generateSampleMaze()">Generate Sample Maze</button>
+        <button id="processBtn" onclick="processMazeWithBoolean()" disabled>Process with Boolean Operations</button>
+        <button onclick="resetView()">Reset View</button>
+        <label>
+            Ball Radius: <input type="range" id="ballRadius" min="0.1" max="0.5" step="0.05" value="0.25" />
+            <span id="ballRadiusValue">0.25</span>
+        </label>
+    </div>
+    <div id="info">
+        <p>Upload a JSON file with maze data or use the sample generator. Format: [{"i": x, "j": y, "walls": [top, right, bottom, left]}]</p>
+        <p>Controls: Mouse to orbit, scroll to zoom. Use "Process with Boolean Operations" to cut maze paths into the cube.</p>
+        <p><strong>Note:</strong> Boolean operations can be computationally intensive for complex mazes.</p>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://unpkg.com/three-mesh-bvh@0.7.8/build/index.umd.js"></script>
+    <script type="module">
+        import * as ThreeBvhCsg from 'https://cdn.jsdelivr.net/npm/three-bvh-csg@0.0.17/+esm';
+        window.ThreeBvhCsg = ThreeBvhCsg;
+
+      // Global variables
+        let scene, camera, renderer, controls;
+        let mazeGroup;
+        let ballRadius = 0.25;
+        let currentMazeData = null;
+
+        // CSG operations using three-bvh-csg
+        // Check if libraries are loaded
+        let Brush, Evaluator, SUBTRACTION, UNION;
+
+        function initCSG() {
+            if (typeof window.ThreeBvhCsg !== 'undefined') {
+                ({ Brush, Evaluator, SUBTRACTION, UNION } = window.ThreeBvhCsg);
+                console.log('CSG libraries loaded successfully');
+                return true;
+            } else {
+                console.error('ThreeBvhCsg not found');
+                return false;
+            }
+        }
+
+        // Create axis indicators
+        function createAxisIndicators() {
+            const axisGroup = new THREE.Group();
+
+            // Create arrow helper for each axis
+            const origin = new THREE.Vector3(0, 0, 0);
+            const length = 3;
+
+            // X-axis (Red)
+            const xDirection = new THREE.Vector3(1, 0, 0);
+            const xArrow = new THREE.ArrowHelper(xDirection, origin, length, 0xff0000, length * 0.2, length * 0.1);
+            axisGroup.add(xArrow);
+
+            // Y-axis (Green)
+            const yDirection = new THREE.Vector3(0, 1, 0);
+            const yArrow = new THREE.ArrowHelper(yDirection, origin, length, 0x00ff00, length * 0.2, length * 0.1);
+            axisGroup.add(yArrow);
+
+            // Z-axis (Blue)
+            const zDirection = new THREE.Vector3(0, 0, 1);
+            const zArrow = new THREE.ArrowHelper(zDirection, origin, length, 0x0000ff, length * 0.2, length * 0.1);
+            axisGroup.add(zArrow);
+
+            // Add text labels using CSS3D or simple geometry
+            // Create simple text labels using canvas textures
+            const createTextLabel = (text, color) => {
+                const canvas = document.createElement('canvas');
+                const context = canvas.getContext('2d');
+                canvas.width = 64;
+                canvas.height = 32;
+
+                context.fillStyle = color;
+                context.font = '20px Arial';
+                context.textAlign = 'center';
+                context.fillText(text, 32, 20);
+
+                const texture = new THREE.CanvasTexture(canvas);
+                const material = new THREE.SpriteMaterial({ map: texture });
+                const sprite = new THREE.Sprite(material);
+                sprite.scale.set(0.5, 0.25, 1);
+
+                return sprite;
+            };
+
+            // Add labels at the end of each axis
+            const xLabel = createTextLabel('X', '#ff0000');
+            xLabel.position.set(length + 0.3, 0, 0);
+            axisGroup.add(xLabel);
+
+            const yLabel = createTextLabel('Y', '#00ff00');
+            yLabel.position.set(0, length + 0.3, 0);
+            axisGroup.add(yLabel);
+
+            const zLabel = createTextLabel('Z', '#0000ff');
+            zLabel.position.set(0, 0, length + 0.3);
+            axisGroup.add(zLabel);
+
+            scene.add(axisGroup);
+        }
+
+        // Initialize Three.js scene
+        function init() {
+            // Initialize CSG libraries
+            if (!initCSG()) {
+                document.getElementById('processBtn').style.display = 'none';
+                document.getElementById('info').innerHTML += '<p style="color: red;"><strong>Warning:</strong> CSG libraries failed to load. Boolean operations disabled.</p>';
+            }
+
+            // Scene setup
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x222222);
+
+            // Camera setup
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(10, 10, 10);
+            camera.lookAt(0, 0, 0);
+
+            // Renderer setup
+            const container = document.getElementById('container');
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(container.clientWidth, container.clientHeight);
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            container.appendChild(renderer.domElement);
+
+            // Basic orbit controls (simplified version)
+            setupControls();
+
+            // Lighting
+            const ambientLight = new THREE.AmbientLight(0x404040, 0.6);
+            scene.add(ambientLight);
+
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            directionalLight.position.set(10, 10, 5);
+            directionalLight.castShadow = true;
+            directionalLight.shadow.mapSize.width = 2048;
+            directionalLight.shadow.mapSize.height = 2048;
+            scene.add(directionalLight);
+
+            // Add axis indicators
+            createAxisIndicators();
+
+            // Create maze group
+            mazeGroup = new THREE.Group();
+            scene.add(mazeGroup);
+
+            // Handle window resize
+            window.addEventListener('resize', onWindowResize);
+
+            // Handle ball radius change
+            document.getElementById('ballRadius').addEventListener('input', (e) => {
+                ballRadius = parseFloat(e.target.value);
+                document.getElementById('ballRadiusValue').textContent = ballRadius;
+            });
+
+            // File input handler
+            document.getElementById('fileInput').addEventListener('change', handleFileSelect);
+
+            // Start render loop
+            animate();
+        }
+
+        // Simple orbit controls implementation
+        function setupControls() {
+            let mouseDown = false;
+            let mouseX = 0;
+            let mouseY = 0;
+            let lon = 0;
+            let lat = 0;
+            let phi = 0;
+            let theta = 0;
+            let distance = 15;
+
+            renderer.domElement.addEventListener('mousedown', onMouseDown);
+            renderer.domElement.addEventListener('mousemove', onMouseMove);
+            renderer.domElement.addEventListener('mouseup', onMouseUp);
+            renderer.domElement.addEventListener('wheel', onMouseWheel);
+
+            function onMouseDown(event) {
+                mouseDown = true;
+                mouseX = event.clientX;
+                mouseY = event.clientY;
+            }
+
+            function onMouseMove(event) {
+                if (!mouseDown) return;
+
+                const deltaX = event.clientX - mouseX;
+                const deltaY = event.clientY - mouseY;
+
+                lon += deltaX * 0.5;
+                lat += deltaY * 0.5;
+
+                lat = Math.max(-85, Math.min(85, lat));
+
+                phi = THREE.MathUtils.degToRad(90 - lat);
+                theta = THREE.MathUtils.degToRad(lon);
+
+                camera.position.x = distance * Math.sin(phi) * Math.cos(theta);
+                camera.position.y = distance * Math.cos(phi);
+                camera.position.z = distance * Math.sin(phi) * Math.sin(theta);
+
+                camera.lookAt(scene.position);
+
+                mouseX = event.clientX;
+                mouseY = event.clientY;
+            }
+
+            function onMouseUp() {
+                mouseDown = false;
+            }
+
+            function onMouseWheel(event) {
+                distance += event.deltaY * 0.01;
+                distance = Math.max(5, Math.min(50, distance));
+
+                phi = THREE.MathUtils.degToRad(90 - lat);
+                theta = THREE.MathUtils.degToRad(lon);
+
+                camera.position.x = distance * Math.sin(phi) * Math.cos(theta);
+                camera.position.y = distance * Math.cos(phi);
+                camera.position.z = distance * Math.sin(phi) * Math.sin(theta);
+
+                camera.lookAt(scene.position);
+            }
+        }
+
+        // Create cylinder geometry
+        function createCylinder(position, rotation, radius = 0.1, height = 2.0) {
+            const geometry = new THREE.CylinderGeometry(radius, radius, height, 16);
+            const material = new THREE.MeshLambertMaterial({ color: 0x00ff00 });
+            const cylinder = new THREE.Mesh(geometry, material);
+
+            cylinder.position.set(position.x, position.y, position.z);
+            if (rotation) {
+                cylinder.rotation.set(rotation.x, rotation.y, rotation.z);
+            }
+
+            return cylinder;
+        }
+
+        // Create sphere geometry
+        function createSphere(position, radius = 0.2) {
+            const geometry = new THREE.SphereGeometry(radius, 16, 16);
+            const material = new THREE.MeshLambertMaterial({ color: 0xff0000 });
+            const sphere = new THREE.Mesh(geometry, material);
+
+            sphere.position.set(position.x, position.y, position.z);
+
+            return sphere;
+        }
+
+        // Create base cube (equivalent to Blender's base cube)
+        function createBaseCube() {
+            const geometry = new THREE.BoxGeometry(10, 0.4, 10); // Swapped height and depth
+            const material = new THREE.MeshLambertMaterial({ color: 0x8B4513 }); // Brown color like a maze base
+            const cube = new THREE.Mesh(geometry, material);
+
+            cube.position.set(4.5, 0.2, 4.5);
+            cube.rotation.x = Math.PI / 2; // 90 degrees around X-axis (red axis)
+            cube.castShadow = true;
+            cube.receiveShadow = true;
+
+            return cube;
+        }
+
+        // Perform boolean union operation
+        function booleanUnion(target, toUnion) {
+            const evaluator = new Evaluator();
+            const targetBrush = new Brush(target.geometry);
+            const unionBrush = new Brush(toUnion.geometry);
+
+            // Apply transforms
+            targetBrush.applyTransform(target.matrixWorld);
+            unionBrush.applyTransform(toUnion.matrixWorld);
+
+            const result = evaluator.evaluate(targetBrush, unionBrush, UNION);
+            return result;
+        }
+
+        // Perform boolean subtraction operation
+        function booleanSubtraction(target, toSubtract) {
+            const evaluator = new Evaluator();
+            const targetBrush = new Brush(target.geometry);
+            const subtractBrush = new Brush(toSubtract.geometry);
+
+            // Apply transforms
+            targetBrush.applyTransform(target.matrixWorld);
+            subtractBrush.applyTransform(toSubtract.matrixWorld);
+
+            const result = evaluator.evaluate(targetBrush, subtractBrush, SUBTRACTION);
+            return result;
+        }
+
+        // Process individual cell from maze data
+        function makeCell(cell, balls, cylinders) {
+            // Create sphere for cell center - positioned to intersect with the cube
+            const ball = createSphere({ x: cell.i, y: 0.2, z: cell.j }, ballRadius);
+            balls.push(ball);
+
+            // Right connection
+            if (!cell.walls[1]) {
+                console.log("Connect right");
+                const c = createCylinder(
+                    { x: cell.i + 0.5, y: 0.2, z: cell.j },
+                    { x: 0, y: 0, z: Math.PI / 2 },
+                    ballRadius,
+                    1.0
+                );
+                c.userData = { side: "Right", pos: [cell.i, cell.j] };
+                cylinders.push(c);
+            }
+
+            // Bottom connection
+            if (!cell.walls[2]) {
+                console.log("Connect bottom");
+                const c = createCylinder(
+                    { x: cell.i, y: 0.2, z: cell.j + 0.5 },
+                    { x: Math.PI / 2, y: 0, z: 0 },
+                    ballRadius,
+                    1.0
+                );
+                c.userData = { side: "Bottom", pos: [cell.i, cell.j] };
+                cylinders.push(c);
+            }
+        }
+
+        // Generate maze from JSON data (visualization only)
+        function generateMaze(jsonData) {
+            currentMazeData = jsonData;
+
+            // Clear existing maze
+            while (mazeGroup.children.length > 0) {
+                mazeGroup.remove(mazeGroup.children[0]);
+            }
+
+            // Create base cube
+            const baseCube = createBaseCube();
+            mazeGroup.add(baseCube);
+
+            // Arrays to store maze elements
+            const balls = [];
+            const cylinders = [];
+
+            // Process each cell
+            jsonData.forEach(cell => {
+                makeCell(cell, balls, cylinders);
+            });
+
+            // Add all elements to scene for visualization
+            balls.forEach(ball => {
+                ball.material.transparent = true;
+                ball.material.opacity = 0.7;
+                mazeGroup.add(ball);
+            });
+
+            cylinders.forEach(cylinder => {
+                cylinder.material.transparent = true;
+                cylinder.material.opacity = 0.7;
+                mazeGroup.add(cylinder);
+            });
+
+            // Enable the boolean processing button
+            document.getElementById('processBtn').disabled = false;
+
+            console.log(`Generated maze preview with ${balls.length} balls and ${cylinders.length} cylinders`);
+        }
+
+        // Process maze with boolean operations (like the original Blender script)
+        function processMazeWithBoolean() {
+            if (!currentMazeData) {
+                alert('Please generate a maze first');
+                return;
+            }
+
+            if (!Brush || !Evaluator) {
+                alert('CSG libraries not loaded. Cannot perform boolean operations.');
+                return;
+            }
+
+            console.log('Starting boolean operations...');
+            document.getElementById('processBtn').disabled = true;
+            document.getElementById('processBtn').textContent = 'Processing...';
+
+            // Use setTimeout to allow UI to update
+            setTimeout(() => {
+                try {
+                    // Clear existing maze
+                    while (mazeGroup.children.length > 0) {
+                        mazeGroup.remove(mazeGroup.children[0]);
+                    }
+
+                    // Create base cube
+                    const baseCube = createBaseCube();
+                    baseCube.updateMatrixWorld();
+
+                    // Arrays to store maze elements
+                    const balls = [];
+                    const cylinders = [];
+
+                    // Process each cell
+                    currentMazeData.forEach(cell => {
+                        makeCell(cell, balls, cylinders);
+                    });
+
+                    // Update all matrices
+                    balls.forEach(ball => ball.updateMatrixWorld());
+                    cylinders.forEach(cylinder => cylinder.updateMatrixWorld());
+
+                    if (balls.length > 0 || cylinders.length > 0) {
+                        const evaluator = new Evaluator();
+                        let cuttingBrush = null;
+
+                        // Create union of all cutting objects
+                        if (balls.length > 0) {
+                            cuttingBrush = new Brush(balls[0].geometry);
+                            cuttingBrush.applyTransform(balls[0].matrixWorld);
+
+                            // Union remaining balls
+                            for (let i = 1; i < balls.length; i++) {
+                                const ballBrush = new Brush(balls[i].geometry);
+                                ballBrush.applyTransform(balls[i].matrixWorld);
+                                cuttingBrush = evaluator.evaluate(cuttingBrush, ballBrush, UNION);
+                            }
+
+                            // Union cylinders
+                            cylinders.forEach(cylinder => {
+                                const cylinderBrush = new Brush(cylinder.geometry);
+                                cylinderBrush.applyTransform(cylinder.matrixWorld);
+                                cuttingBrush = evaluator.evaluate(cuttingBrush, cylinderBrush, UNION);
+                            });
+                        } else if (cylinders.length > 0) {
+                            cuttingBrush = new Brush(cylinders[0].geometry);
+                            cuttingBrush.applyTransform(cylinders[0].matrixWorld);
+
+                            for (let i = 1; i < cylinders.length; i++) {
+                                const cylinderBrush = new Brush(cylinders[i].geometry);
+                                cylinderBrush.applyTransform(cylinders[i].matrixWorld);
+                                cuttingBrush = evaluator.evaluate(cuttingBrush, cylinderBrush, UNION);
+                            }
+                        }
+
+                        // Subtract cutting objects from base cube
+                        const baseBrush = new Brush(baseCube.geometry);
+                        baseBrush.applyTransform(baseCube.matrixWorld);
+
+                        const finalGeometry = evaluator.evaluate(baseBrush, cuttingBrush, SUBTRACTION);
+
+                        // Create final mesh
+                        const finalMaze = new THREE.Mesh(finalGeometry, baseCube.material);
+                        finalMaze.position.copy(baseCube.position);
+                        finalMaze.castShadow = true;
+                        finalMaze.receiveShadow = true;
+
+                        mazeGroup.add(finalMaze);
+
+                        console.log('Boolean operations completed successfully!');
+                    } else {
+                        mazeGroup.add(baseCube);
+                    }
+
+                } catch (error) {
+                    console.error('Error during boolean operations:', error);
+                    alert('Error during boolean operations: ' + error.message + '. Check console for details.');
+                    // Fallback to preview mode
+                    generateMaze(currentMazeData);
+                } finally {
+                    document.getElementById('processBtn').disabled = false;
+                    document.getElementById('processBtn').textContent = 'Process with Boolean Operations';
+                }
+            }, 100);
+        }
+
+        // Handle file selection
+        function handleFileSelect(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                try {
+                    const jsonData = JSON.parse(e.target.result);
+                    generateMaze(jsonData);
+                } catch (error) {
+                    alert('Error parsing JSON file: ' + error.message);
+                }
+            };
+            reader.readAsText(file);
+        }
+
+        // Generate sample maze data
+        function generateSampleMaze() {
+            const sampleData = [
+                { i: 0, j: 0, walls: [true, false, false, true] },
+                { i: 1, j: 0, walls: [true, false, true, false] },
+                { i: 2, j: 0, walls: [true, true, false, false] },
+                { i: 0, j: 1, walls: [false, true, false, true] },
+                { i: 1, j: 1, walls: [true, false, true, true] },
+                { i: 2, j: 1, walls: [false, true, true, false] },
+                { i: 0, j: 2, walls: [false, false, true, true] },
+                { i: 1, j: 2, walls: [true, false, true, false] },
+                { i: 2, j: 2, walls: [true, true, true, false] }
+            ];
+
+            generateMaze(sampleData);
+        }
+
+        // Reset camera view
+        function resetView() {
+            camera.position.set(10, 10, 10);
+            camera.lookAt(0, 0, 0);
+        }
+
+        // Handle window resize
+        function onWindowResize() {
+            const container = document.getElementById('container');
+            camera.aspect = container.clientWidth / container.clientHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(container.clientWidth, container.clientHeight);
+        }
+
+        // Animation loop
+        function animate() {
+            requestAnimationFrame(animate);
+            renderer.render(scene, camera);
+        }
+
+        // Initialize when page loads
+        window.addEventListener('load', init);
+    </script>
+</body>
+</html>
