@@ -1,169 +1,191 @@
-import json
+#!/usr/bin/env python3
+"""Maze generation functions using graph algorithms"""
+
 import random
-from dataclasses import dataclass, field
-
-import pygame
-
-# Constants
-WIDTH, HEIGHT = 400, 400
-COLS, ROWS = 12, 12
-W = min(WIDTH // COLS, HEIGHT // ROWS)  # Cell size
-
-# Colors
-BLACK = (0, 0, 0)
-WHITE = (255, 255, 255)
-MAGENTA = (255, 0, 255, 100)
-GREEN = (0, 255, 0, 150)
-
-# Initialize Pygame
-pygame.init()
-screen = pygame.display.set_mode((WIDTH, HEIGHT))
-clock = pygame.time.Clock()
-
-#Seed
-seed = random.randrange(0, 2**32, 1)
-print("Using seed: ", seed)
-random.seed(seed)
-
-# Grid
-grid = []
-stack = []
-current = None
-
-def reset_state():
-    seed = random.randrange(0, 2**32, 1)
-    print("Using seed: ", seed)
-    random.seed(seed)
-    grid = []
-    stack = []
-    current = None
+from graphs import Graph, Node, Edge, RectGridGraph
 
 
-# Helper to get grid index
-def index(i, j):
-    if i < 0 or j < 0 or i >= COLS or j >= ROWS:
-        return -1
-    return i + j * COLS
-
-# Cell class
-@dataclass
-class Cell:
-    i: int
-    j: int
-    walls: list[bool] = field(default_factory = lambda: list((True, True, True, True))) #self.walls = [True, True, True, True]  # Top, right, bottom, left
-    visited: bool = False
-
-    # def __init__(self, i, j):
-    #     self.i = i
-    #     self.j = j
-    #     self.walls = [True, True, True, True]  # Top, right, bottom, left
-    #     self.visited = False
-
-    def show(self):
-        x, y = self.i * W, self.j * W
-        if self.visited:
-            pygame.draw.rect(screen, MAGENTA, (x, y, W, W))
-        if self.walls[0]:
-            pygame.draw.line(screen, WHITE, (x, y), (x + W, y))  # Top
-        if self.walls[1]:
-            pygame.draw.line(screen, WHITE, (x + W, y), (x + W, y + W))  # Right
-        if self.walls[2]:
-            pygame.draw.line(screen, WHITE, (x + W, y + W), (x, y + W))  # Bottom
-        if self.walls[3]:
-            pygame.draw.line(screen, WHITE, (x, y + W), (x, y))  # Left
-
-    def highlight(self):
-        x, y = self.i * W, self.j * W
-        pygame.draw.rect(screen, GREEN, (x, y, W, W))
-
-    def check_neighbors(self):
-        neighbors = []
-
-        top = grid[index(self.i, self.j - 1)] if index(self.i, self.j - 1) != -1 else None
-        right = grid[index(self.i + 1, self.j)] if index(self.i + 1, self.j) != -1 else None
-        bottom = grid[index(self.i, self.j + 1)] if index(self.i, self.j + 1) != -1 else None
-        left = grid[index(self.i - 1, self.j)] if index(self.i - 1, self.j) != -1 else None
-
-        if top and not top.visited:
-            neighbors.append(top)
-        if right and not right.visited:
-            neighbors.append(right)
-        if bottom and not bottom.visited:
-            neighbors.append(bottom)
-        if left and not left.visited:
-            neighbors.append(left)
-
-        if neighbors:
-            return random.choice(neighbors)
+def generate_maze_dfs(graph, start_idx, end_idx=None):
+    """
+    Generate a maze using Depth-First Search algorithm on a graph.
+    
+    Args:
+        graph: A Graph object (should have nodes and edges)
+        start_idx: Starting node index for the maze
+        end_idx: Optional ending node index (if None, will use a random far node)
+        
+    Returns:
+        tuple: (maze_edges, path) where maze_edges are the edges in the maze
+               and path is the solution path from start to end
+    """
+    # Validate inputs
+    if start_idx < 0 or start_idx >= len(graph.nodes):
+        raise ValueError(f"Start index {start_idx} is out of range for graph with {len(graph.nodes)} nodes")
+    
+    if end_idx is not None:
+        if end_idx < 0 or end_idx >= len(graph.nodes):
+            raise ValueError(f"End index {end_idx} is out of range for graph with {len(graph.nodes)} nodes")
+    
+    # If no end is specified, choose a far node (opposite corner for grid graphs)
+    if end_idx is None and hasattr(graph, 'w') and hasattr(graph, 'h'):
+        # For RectGridGraph, choose opposite corner
+        end_idx = (graph.w - 1) + (graph.h - 1) * graph.w
+    elif end_idx is None:
+        # For other graphs, choose a random node far from start
+        max_distance = -1
+        best_end = start_idx
+        
+        for i, node in enumerate(graph.nodes):
+            if i == start_idx:
+                continue
+            # Simple distance metric (could be improved)
+            distance = abs(node.x - graph.nodes[start_idx].x) + abs(node.y - graph.nodes[start_idx].y)
+            if distance > max_distance:
+                max_distance = distance
+                best_end = i
+        end_idx = best_end
+    
+    # Create adjacency list for easier traversal
+    adjacency = {}
+    for node_idx, node in enumerate(graph.nodes):
+        adjacency[node_idx] = []
+    
+    for edge in graph.edges:
+        adjacency[edge.a_id].append(edge.b_id)
+        adjacency[edge.b_id].append(edge.a_id)
+    
+    # DFS to generate maze (similar to recursive backtracker algorithm)
+    visited = set()
+    stack = [start_idx]
+    maze_edges = []  # Edges that are part of the maze
+    
+    while stack:
+        current_idx = stack[-1]
+        visited.add(current_idx)
+        
+        # Get unvisited neighbors
+        unvisited_neighbors = []
+        for neighbor_idx in adjacency[current_idx]:
+            if neighbor_idx not in visited:
+                unvisited_neighbors.append(neighbor_idx)
+        
+        if unvisited_neighbors:
+            # Choose random neighbor
+            next_idx = random.choice(unvisited_neighbors)
+            
+            # Add the edge between current and next to maze
+            # Find the actual edge in the graph
+            for edge in graph.edges:
+                if (edge.a_id == current_idx and edge.b_id == next_idx) or \
+                   (edge.a_id == next_idx and edge.b_id == current_idx):
+                    maze_edges.append(edge)
+                    break
+            
+            stack.append(next_idx)
         else:
-            return None
-
-# Remove walls between two cells
-def remove_walls(a, b):
-    dx = a.i - b.i
-    if dx == 1:
-        a.walls[3] = False
-        b.walls[1] = False
-    elif dx == -1:
-        a.walls[1] = False
-        b.walls[3] = False
-
-    dy = a.j - b.j
-    if dy == 1:
-        a.walls[0] = False
-        b.walls[2] = False
-    elif dy == -1:
-        a.walls[2] = False
-        b.walls[0] = False
-
-# Create grid
-for j in range(ROWS):
-    for i in range(COLS):
-        grid.append(Cell(i, j))
-
-current = grid[0]
-
-# Main loop
-running = True
-while running:
-    screen.fill(BLACK)
-
-    for event in pygame.event.get():
-        if event.type == pygame.QUIT:
-            running = False
-
-    # Draw grid
-    for cell in grid:
-        cell.show()
-
-    # Maze generation logic
-    current.visited = True
-    current.highlight()
-
-    next_cell = current.check_neighbors()
-    if next_cell:
-        next_cell.visited = True
-        stack.append(current)
-        remove_walls(current, next_cell)
-        current = next_cell
-    elif stack:
-        current = stack.pop()
-
-    keys = pygame.key.get_pressed()
-    if keys[pygame.K_s]:
-        fileName = "maze-%d.json" % seed
-        with open(fileName, "w") as fh:
-            json.dump([c.__dict__ for c in grid], fh)
-        print("Maze dumped to: ", fileName)
-    if keys[pygame.K_q]:
-        print("Exiting.")
-        running = False
-    if keys[pygame.K_r]:
-        print("Resetting maze.")
-        reset_state()
+            # Backtrack
+            stack.pop()
+    
+    # Now find a path from start to end using the maze edges
+    # We'll use DFS again to find a path through the maze
+    path = find_path_dfs(start_idx, end_idx, maze_edges, graph.nodes)
+    
+    return maze_edges, path
 
 
-    pygame.display.flip()
-    clock.tick(30)
+def find_path_dfs(start_idx, end_idx, maze_edges, nodes):
+    """
+    Find a path from start to end using only the maze edges.
+    
+    Args:
+        start_idx: Starting node index
+        end_idx: Ending node index  
+        maze_edges: List of edges that form the maze
+        nodes: List of nodes in the graph
+        
+    Returns:
+        list: List of node indices forming the path from start to end
+    """
+    # Create adjacency list from maze edges
+    adjacency = {}
+    for node_idx in range(len(nodes)):
+        adjacency[node_idx] = []
+    
+    for edge in maze_edges:
+        adjacency[edge.a_id].append(edge.b_id)
+        adjacency[edge.b_id].append(edge.a_id)
+    
+    # DFS to find path
+    visited = set()
+    stack = [(start_idx, [start_idx])]  # (current_idx, path_so_far)
+    
+    while stack:
+        current_idx, path_so_far = stack.pop()
+        
+        if current_idx == end_idx:
+            return path_so_far
+        
+        if current_idx not in visited:
+            visited.add(current_idx)
+            
+            # Add neighbors to stack in reverse order to process them in order
+            for neighbor_idx in reversed(adjacency[current_idx]):
+                if neighbor_idx not in visited:
+                    stack.append((neighbor_idx, path_so_far + [neighbor_idx]))
+    
+    # If no path found (shouldn't happen in a connected maze)
+    return [start_idx, end_idx]
 
-pygame.quit()
+
+def generate_maze_with_solution(graph, start_idx, end_idx=None):
+    """
+    Convenience function that generates a maze and returns both the maze and solution.
+    
+    Args:
+        graph: A Graph object
+        start_idx: Starting node index
+        end_idx: Optional ending node index
+        
+    Returns:
+        dict: Dictionary containing maze_edges and solution_path
+    """
+    maze_edges, solution_path = generate_maze_dfs(graph, start_idx, end_idx)
+    
+    return {
+        'maze_edges': maze_edges,
+        'solution_path': solution_path,
+        'start_node': graph.nodes[start_idx],
+        'end_node': graph.nodes[end_idx]
+    }
+
+
+def print_maze_info(maze_result):
+    """
+    Print information about a generated maze.
+    
+    Args:
+        maze_result: Dictionary from generate_maze_with_solution
+    """
+    print(f"Maze generated with {len(maze_result['maze_edges'])} edges")
+    print(f"Solution path has {len(maze_result['solution_path'])} steps")
+    print(f"Start: ({maze_result['start_node'].x}, {maze_result['start_node'].y})")
+    print(f"End: ({maze_result['end_node'].x}, {maze_result['end_node'].y})")
+    print("Solution path:", " -> ".join(str(idx) for idx in maze_result['solution_path']))
+
+
+if __name__ == "__main__":
+    # Demo usage
+    print("=== Maze Generation Demo ===")
+    
+    # Create a small grid
+    grid = RectGridGraph(5, 5)
+    print(f"Created {grid.w}x{grid.h} grid with {len(grid.nodes)} nodes and {len(grid.edges)} edges")
+    
+    # Generate maze from top-left (0) to bottom-right (24 in 5x5 grid)
+    start_idx = 0
+    end_idx = 24
+    
+    print(f"\nGenerating maze from node {start_idx} to node {end_idx}...")
+    maze_result = generate_maze_with_solution(grid, start_idx, end_idx)
+    
+    print_maze_info(maze_result)
